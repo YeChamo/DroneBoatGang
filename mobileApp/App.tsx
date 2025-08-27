@@ -1,45 +1,29 @@
-/**
- * Sample React Native App
- * https://github.com/facebook/react-native
- *
- * @format
- */
+// App.tsx
+import React from 'react';
+import {NavigationContainer} from '@react-navigation/native';
+import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
+import BluetoothScreen from './src/screens/BluetoothScreen';
+import MapScreen from './src/screens/MapScreen';
 
-import { NewAppScreen } from '@react-native/new-app-screen';
-import { StatusBar, StyleSheet, useColorScheme, View } from 'react-native';
-import {
-  SafeAreaProvider,
-  useSafeAreaInsets,
-} from 'react-native-safe-area-context';
+export type RootTabParamList = {
+  BLUETOOTH: undefined;
+  MAP: undefined;
+};
 
-function App() {
-  const isDarkMode = useColorScheme() === 'dark';
+const Tab = createBottomTabNavigator<RootTabParamList>();
 
+export default function App() {
   return (
-    <SafeAreaProvider>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <AppContent />
-    </SafeAreaProvider>
+    <NavigationContainer>
+      <Tab.Navigator
+        screenOptions={{
+          headerTitleAlign: 'center',
+          tabBarLabelStyle: {fontSize: 12},
+        }}
+      >
+        <Tab.Screen name="BLUETOOTH" component={BluetoothScreen} />
+        <Tab.Screen name="MAP" component={MapScreen} />
+      </Tab.Navigator>
+    </NavigationContainer>
   );
 }
-
-function AppContent() {
-  const safeAreaInsets = useSafeAreaInsets();
-
-  return (
-    <View style={styles.container}>
-      <NewAppScreen
-        templateFileName="App.tsx"
-        safeAreaInsets={safeAreaInsets}
-      />
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-});
-
-export default App;
