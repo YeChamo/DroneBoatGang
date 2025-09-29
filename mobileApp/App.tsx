@@ -14,7 +14,7 @@ import { WebView } from 'react-native-webview';
 
 const { width, height } = Dimensions.get('window');
 
-const LeafletMap = ({ latitude = 36.0687, longitude = -94.1748 }) => {
+const LeafletMap = ({ latitude = 36.0687, longitude = -94.1748, interactive = true }) => {
   const html = `
     <!DOCTYPE html>
     <html>
@@ -38,8 +38,13 @@ const LeafletMap = ({ latitude = 36.0687, longitude = -94.1748 }) => {
         document.addEventListener('DOMContentLoaded', function() {
           try {
             const map = L.map('map', {
-              zoomControl: false,
-              attributionControl: false
+              zoomControl: ${interactive},
+              attributionControl: false,
+              dragging: ${interactive},
+              touchZoom: ${interactive},
+              scrollWheelZoom: ${interactive},
+              doubleClickZoom: ${interactive},
+              boxZoom: ${interactive}
             }).setView([${latitude}, ${longitude}], 16);
 
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -73,6 +78,7 @@ const LeafletMap = ({ latitude = 36.0687, longitude = -94.1748 }) => {
       mixedContentMode="compatibility"
       allowsInlineMediaPlayback={true}
       style={{ width: '100%', height: '100%' }}
+      scrollEnabled={interactive}
       onError={(syntheticEvent) => {
         const { nativeEvent } = syntheticEvent;
         console.warn('WebView error: ', nativeEvent);
@@ -86,10 +92,10 @@ const LeafletMap = ({ latitude = 36.0687, longitude = -94.1748 }) => {
 };
 
 const App = () => {
-  const [isToggled, setIsToggled] = useState(false);
+  const [activeTab, setActiveTab] = useState('bluetooth');
+  const [isConnected, setIsConnected] = useState(false);
   const [showControlScreen, setShowControlScreen] = useState(false);
-
-  const handleToggle = () => setIsToggled(prev => !prev);
+  const [sliderValue, setSliderValue] = useState(3);
 
   useEffect(() => {
     if (showControlScreen) {
@@ -98,6 +104,90 @@ const App = () => {
       Orientation.lockToPortrait();
     }
   }, [showControlScreen]);
+
+  const renderBluetoothScreen = () => (
+    <View style={styles.screenContent}>
+      <Text style={styles.screenTitle}>BLUETOOTH</Text>
+      <View style={styles.centerArea}>
+        <Pressable
+          onPress={() => setIsConnected(!isConnected)}
+          style={styles.connectButton}
+        >
+          <Text style={styles.connectButtonText}>Connect Device</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+
+  const renderMapScreen = () => (
+    <View style={styles.screenContent}>
+      <Text style={styles.screenTitle}>CONTROL</Text>
+      <View style={styles.mapContainer}>
+        <View style={styles.squareMapWrapper}>
+          <LeafletMap latitude={36.0687} longitude={-94.1748} interactive={false} />
+        </View>
+
+        <View style={styles.controlsRow}>
+          <Pressable style={styles.recallButton}>
+            <Text style={styles.recallButtonText}>Recall</Text>
+          </Pressable>
+
+          <View style={styles.sliderContainer}>
+            <Text style={styles.sliderLabel}>Boats: {sliderValue}</Text>
+            <View style={styles.sliderWrapper}>
+              <Pressable
+                style={styles.sliderButton}
+                onPress={() => setSliderValue(Math.max(1, sliderValue - 1))}
+              >
+                <Text style={styles.sliderButtonText}>-</Text>
+              </Pressable>
+
+              <View style={styles.speedIndicator}>
+                {[1, 2, 3, 4, 5].map((val) => (
+                  <View
+                    key={val}
+                    style={[
+                      styles.speedDot,
+                      val <= sliderValue && styles.speedDotActive
+                    ]}
+                  />
+                ))}
+              </View>
+
+              <Pressable
+                style={styles.sliderButton}
+                onPress={() => setSliderValue(Math.min(5, sliderValue + 1))}
+              >
+                <Text style={styles.sliderButtonText}>+</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.joystickContainer}>
+          <View style={styles.joystickWrapper}>
+            <View style={styles.joystickOuter}>
+              <View style={styles.joystickInner} />
+            </View>
+          </View>
+          <View style={styles.joystickWrapper}>
+            <View style={styles.joystickOuter}>
+              <View style={styles.joystickInner} />
+            </View>
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+
+  const renderLocationScreen = () => (
+    <View style={styles.screenContent}>
+      <Text style={styles.screenTitle}>MAP</Text>
+      <View style={styles.fullMapContainer}>
+        <LeafletMap latitude={36.0687} longitude={-94.1748} interactive={true} />
+      </View>
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.container}>
@@ -113,46 +203,287 @@ const App = () => {
           </Pressable>
         </View>
       ) : (
-        // Main Screen
         <>
-          <Text style={styles.title}>Drone Boat App</Text>
-          <View style={styles.centerContent}>
-            <View style={styles.radarWrapper}>
-              <LeafletMap latitude={36.0687} longitude={-94.1748} />
-              <View style={styles.radarFrame}>
-              </View>
-            </View>
+          {/* Main Content Area */}
+          <View style={styles.mainContent}>
+            {activeTab === 'bluetooth' && renderBluetoothScreen()}
+            {activeTab === 'map' && renderMapScreen()}
+            {activeTab === 'location' && renderLocationScreen()}
+          </View>
 
-            <Text style={styles.bluetooth}>Bluetooth</Text>
+          {/* Bottom Navigation */}
+          <View style={styles.bottomNav}>
             <Pressable
-              onPress={handleToggle}
-              style={[styles.button, { backgroundColor: isToggled ? 'blue' : 'grey' }]}
+              style={styles.navButton}
+              onPress={() => setActiveTab('bluetooth')}
             >
-              <Text style={styles.buttonText}>{isToggled ? 'ON' : 'OFF'}</Text>
+              <View style={styles.iconContainer}>
+                <Text style={[styles.navIcon, activeTab === 'bluetooth' && styles.activeNavIcon]}>
+                  ᛒ
+                </Text>
+              </View>
+              {activeTab === 'bluetooth' && <View style={styles.activeIndicator} />}
             </Pressable>
 
-            {isToggled && (
-              <Pressable
-                onPress={() => setShowControlScreen(true)}
-                style={[styles.button, { marginTop: 20, backgroundColor: '#006400' }]}
-              >
-                <Text style={styles.buttonText}>Go to Control Screen</Text>
-              </Pressable>
-            )}
+            <Pressable
+              style={styles.navButton}
+              onPress={() => setActiveTab('map')}
+            >
+              <View style={styles.iconContainer}>
+                <View style={[styles.circleIcon, activeTab === 'map' && styles.activeCircleIcon]} />
+              </View>
+              {activeTab === 'map' && <View style={styles.activeIndicator} />}
+            </Pressable>
+
+            <Pressable
+              style={styles.navButton}
+              onPress={() => setActiveTab('location')}
+            >
+              <View style={styles.iconContainer}>
+                <View style={styles.mapPinIcon}>
+                  <View style={[
+                    styles.mapPinCircle,
+                    activeTab === 'location' && { borderColor: '#000' }
+                  ]} />
+                  <View style={[
+                    styles.mapPinPoint,
+                    activeTab === 'location' && { borderTopColor: '#000' }
+                  ]} />
+                </View>
+              </View>
+              {activeTab === 'location' && <View style={styles.activeIndicator} />}
+            </Pressable>
           </View>
         </>
       )}
     </SafeAreaView>
-
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#e6f2e6',
-    padding: 16,
+    backgroundColor: '#f5f5f5',
+  },
+  mainContent: {
+    flex: 1,
+  },
+  screenContent: {
+    flex: 1,
+    backgroundColor: 'white',
+    paddingTop: 20,
+  },
+  screenTitle: {
+    fontSize: 42,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginTop: 20,
+    marginBottom: 20,
+  },
+  centerArea: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
+  },
+  connectButton: {
+    backgroundColor: '#333',
+    paddingVertical: 16,
+    paddingHorizontal: 60,
+    borderRadius: 25,
+  },
+  connectButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  mapContainer: {
+    flex: 1,
+    justifyContent: 'flex-start',
+    alignItems: 'center',
+    paddingTop: 5,
+  },
+  squareMapWrapper: {
+    width: width - 30,
+    height: width - 30,
+    maxWidth: 400,
+    maxHeight: 400,
+    overflow: 'hidden',
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#ddd',
+  },
+  controlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '90%',
+    marginTop: 15,
+    paddingHorizontal: 10,
+  },
+  recallButton: {
+    backgroundColor: '#FF6B6B',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+  },
+  recallButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  sliderContainer: {
+    flex: 1,
+    marginLeft: 15,
+  },
+  sliderLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 5,
+    textAlign: 'center',
+  },
+  sliderWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sliderButton: {
+    width: 30,
+    height: 30,
+    backgroundColor: '#007AFF',
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sliderButtonText: {
+    color: 'white',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  speedIndicator: {
+    flexDirection: 'row',
+    marginHorizontal: 10,
+    gap: 6,
+  },
+  speedDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#D3D3D3',
+  },
+  speedDotActive: {
+    backgroundColor: '#007AFF',
+  },
+  sliderEndLabel: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '600',
+  },
+  joystickContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    width: '100%',
+    paddingHorizontal: 40,
+    marginTop: 'auto',
+    marginBottom: 20,
+  },
+  joystickWrapper: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  joystickOuter: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    borderWidth: 3,
+    borderColor: '#333',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f0f0f0',
+  },
+  joystickInner: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#666',
+  },
+  locationText: {
+    fontSize: 18,
+    color: '#666',
+  },
+  fullMapContainer: {
+    flex: 1,
+    width: '100%',
+  },
+  bottomNav: {
+    flexDirection: 'row',
+    backgroundColor: 'white',
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+    paddingVertical: 10,
+    paddingBottom: 20,
+  },
+  navButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 5,
+  },
+  iconContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  navIcon: {
+    fontSize: 28,
+    color: '#999',
+  },
+  activeNavIcon: {
+    color: '#000',
+  },
+  circleIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: '#999',
+  },
+  activeCircleIcon: {
+    borderColor: '#000',
+  },
+  mapPinIcon: {
+    width: 24,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  mapPinCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#999',
+  },
+  mapPinPoint: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderTopWidth: 8,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderTopColor: '#999',
+    marginTop: -2,
+  },
+  activeMapPinIcon: {
+  },
+  activeIndicator: {
+    position: 'absolute',
+    bottom: -12,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: 'red',
   },
   title: {
     fontSize: 36,
@@ -164,34 +495,6 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 2,
   },
-  centerContent: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  radarWrapper: {
-    width: 250,
-    height: 250,
-    borderRadius: 125,
-    overflow: 'hidden',
-    marginBottom: 40,
-  },
-  radarFrame: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    width: 250,
-    height: 250,
-    borderRadius: 125,
-    borderWidth: 2,
-    borderColor: '#006400',
-    backgroundColor: 'rgba(0,100,0,0.1)',
-  },
-  bluetooth: {
-    fontSize: 24,
-    marginBottom: 20,
-    fontWeight: 'bold',
-  },
   button: {
     paddingVertical: 14,
     paddingHorizontal: 32,
@@ -201,6 +504,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 4,
     elevation: 4,
+    backgroundColor: '#006400',
   },
   buttonText: {
     color: 'white',
@@ -218,14 +522,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 20,
   },
-
-  controlButtons: {
-    marginTop: 30,
-    width: '100%',
-    alignItems: 'center',
-  },
-
-
 });
 
 export default App;
