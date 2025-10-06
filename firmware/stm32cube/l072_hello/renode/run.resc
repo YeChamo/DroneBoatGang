@@ -1,0 +1,14 @@
+using sysbus
+mach create
+machine LoadPlatformDescription @platforms/cpus/stm32l071.repl
+
+showAnalyzer sysbus.usart2
+
+emulation CreateServerSocketTerminal 7001 "lora" false
+connector Connect sysbus.usart1 lora
+
+emulation CreateServerSocketTerminal 7003 "ble" false
+connector Connect sysbus.usart4 ble
+
+sysbus LoadELF @firmware/stm32cube/l072_hello/renode/elf/l072_hello.elf
+start
