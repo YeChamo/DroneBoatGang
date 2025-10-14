@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   SafeAreaView,
   StyleSheet,
@@ -6,62 +6,170 @@ import {
   Pressable,
   View,
   Modal,
-  Dimensions
+  Dimensions,
+  PanResponder
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import Orientation from 'react-native-orientation-locker';
+import 'react-native-gesture-handler';
+
 
 const { width, height } = Dimensions.get('window');
 
 // --- Leaflet Map Component ---
-const LeafletMap = ({ latitude = 36.0687, longitude = -94.1748, interactive = true }) => {
+const LeafletMap = React.memo(({ onMapReady, interactive = true }) => {
+  const webViewRef = useRef(null);
+  const [mapInitialized, setMapInitialized] = useState(false);
+
+  useEffect(() => {
+    if (mapInitialized && onMapReady && webViewRef.current) {
+      onMapReady(webViewRef);
+    }
+  }, [mapInitialized]);
+
   const html = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-      <style>
-        html, body { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; }
-        #map { height: 100vh; width: 100vw; }
-      </style>
-    </head>
-    <body>
-      <div id="map"></div>
-      <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-      <script>
-        document.addEventListener('DOMContentLoaded', function() {
-          const map = L.map('map', {
-            zoomControl: ${interactive},
-            attributionControl: false,
-            dragging: ${interactive},
-            touchZoom: ${interactive},
-            scrollWheelZoom: ${interactive},
-            doubleClickZoom: ${interactive},
-            boxZoom: ${interactive}
-          }).setView([${latitude}, ${longitude}], 13);
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body { height:100%; margin:0; padding:0; }
+    #map { height:100%; width:100%; }
+    .boat-marker {
+      width: 0;
+      height: 0;
+      border-left: 12px solid transparent;
+      border-right: 12px solid transparent;
+      border-bottom: 40px solid #4285F4;
+      transform-origin: 50% 75%;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    let map, boatMarker;
 
-          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: 19,
-          }).addTo(map);
+    function initMap() {
+      map = L.map('map', {
+        zoomControl: ${interactive},
+        dragging: ${interactive},
+        touchZoom: ${interactive},
+        scrollWheelZoom: ${interactive},
+        doubleClickZoom: ${interactive}
+      }).setView([36.0687, -94.1748], 17);
 
-          L.marker([${latitude}, ${longitude}]).addTo(map);
-        });
-      </script>
-    </body>
-    </html>
-  `;
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+      const boatIcon = L.divIcon({
+        className: '',
+        html: '<div class="boat-marker"></div>',
+        iconSize: [30, 30],
+        iconAnchor: [15, 20],
+      });
+
+      boatMarker = L.marker([36.0687, -94.1748], { icon: boatIcon }).addTo(map);
+
+      window.updateBoat = (lat, lng, heading) => {
+        if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
+          console.error('Invalid coordinates:', lat, lng);
+          return;
+        }
+        boatMarker.setLatLng([lat, lng]);
+        const el = boatMarker.getElement();
+        if (el) {
+          const marker = el.querySelector('.boat-marker');
+          if (marker) {
+            marker.style.transform = 'rotate(' + heading + 'deg)';
+          }
+        }
+        map.setView([lat, lng], map.getZoom(), { animate: false });
+      };
+
+      window.ReactNativeWebView.postMessage('mapReady');
+    }
+
+    initMap();
+  </script>
+</body>
+</html>
+`;
 
   return (
     <WebView
+      ref={webViewRef}
       originWhitelist={['*']}
       source={{ html }}
       javaScriptEnabled={true}
       domStorageEnabled={true}
       style={{ flex: 1 }}
-      scrollEnabled={interactive}
+      onMessage={(event) => {
+        if (event.nativeEvent.data === 'mapReady') setMapInitialized(true);
+      }}
     />
+  );
+});
+
+
+// --- Joystick Component ---
+const Joystick = ({ onMove, size = 120, axis = 'both' }) => {
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const maxDistance = size / 2 - 30;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderMove: (evt, gestureState) => {
+        let x = gestureState.dx;
+        let y = gestureState.dy;
+
+        if (axis === 'vertical') {
+          x = 0; //
+          y = Math.max(-maxDistance, Math.min(maxDistance, y));
+        } else if (axis === 'horizontal') {
+          y = 0; //
+          x = Math.max(-maxDistance, Math.min(maxDistance, x));
+        } else {
+          const distance = Math.sqrt(x * x + y * y);
+          if (distance > maxDistance) {
+            const angle = Math.atan2(y, x);
+            x = Math.cos(angle) * maxDistance;
+            y = Math.sin(angle) * maxDistance;
+          }
+        }
+
+        setPosition({ x, y });
+
+        const normalizedX = x / maxDistance;
+        const normalizedY = y / maxDistance;
+
+        onMove(normalizedX, normalizedY);
+      },
+      onPanResponderRelease: () => {
+        setPosition({ x: 0, y: 0 });
+        onMove(0, 0);
+      },
+    })
+  ).current;
+
+  return (
+    <View style={styles.joystickArea}>
+      <View style={[styles.joystickOuter, { width: size, height: size, borderRadius: size / 2 }]}>
+        <View
+          {...panResponder.panHandlers}
+          style={[
+            styles.joystickInner,
+            {
+              transform: [{ translateX: position.x }, { translateY: position.y }],
+            },
+          ]}
+        />
+      </View>
+    </View>
   );
 };
 
@@ -72,30 +180,97 @@ const App = () => {
   const [showBoatSelector, setShowBoatSelector] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  // --- Effects ---
+  const [markerPosition, setMarkerPosition] = useState({
+    latitude: 36.0687,
+    longitude: -94.1748,
+    heading: 0
+  });
+
+
+  const [leftJoystick, setLeftJoystick] = useState({ x: 0, y: 0 });
+  const [rightJoystick, setRightJoystick] = useState({ x: 0, y: 0 });
+
+
+  const mapRef = useRef(null);
+  const [mapInitialized, setMapInitialized] = useState(false);
+
+
   useEffect(() => {
     const timer = setTimeout(() => setShowSplashScreen(false), 2000);
     return () => clearTimeout(timer);
   }, []);
 
-  // Effect to handle screen orientation
   useEffect(() => {
     if (activeTab === 'control') {
       Orientation.lockToLandscape();
     } else {
       Orientation.lockToPortrait();
     }
-    // Cleanup function to reset orientation when the app closes or component unmounts
     return () => {
       Orientation.lockToPortrait();
     };
   }, [activeTab]);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if ((leftJoystick.y !== 0 || rightJoystick.x !== 0) && mapRef.current && mapInitialized) {
+        setMarkerPosition(prev => {
+          // SPEEDS
+          const moveSpeed = 0.00005; // How fast boat moves
+          const rotationSpeed = 5;   // How fast boat rotates
+
+          // RIGHT JOYSTICK:
+          const newHeading = (prev.heading + rightJoystick.x * rotationSpeed + 360) % 360;
+
+          // LEFT JOYSTICK:
+          let newLat = prev.latitude;
+          let newLng = prev.longitude;
+
+
+          if (leftJoystick.y !== 0) {
+            const headingRad = (prev.heading * Math.PI) / 180;
+
+            const moveDistance = -leftJoystick.y * moveSpeed;
+
+            newLat = prev.latitude + Math.cos(headingRad) * moveDistance;
+            newLng = prev.longitude + Math.sin(headingRad) * moveDistance;
+          }
+
+          if (mapRef.current && mapInitialized) {
+            mapRef.current.injectJavaScript(
+              `window.updateBoat(${newLat}, ${newLng}, ${newHeading}); true;`
+            );
+          }
+
+          return {
+            latitude: newLat,
+            longitude: newLng,
+            heading: newHeading
+          };
+        });
+      }
+    }, 50);
+
+    return () => clearInterval(interval);
+  }, [leftJoystick, rightJoystick, mapInitialized]);
+
+  const handleMapReady = (ref) => {
+    mapRef.current = ref.current;
+    // Give the map a moment to fully initialize
+    setTimeout(() => {
+      setMapInitialized(true);
+      // Initialize the marker at the correct position
+      if (ref.current) {
+        ref.current.injectJavaScript(
+          `window.updateBoat(${markerPosition.latitude}, ${markerPosition.longitude}, ${markerPosition.heading}); true;`
+        );
+      }
+    }, 500);
+  };
 
   // --- Screens ---
   const renderSplashScreen = () => (
     <View style={styles.splashContainer}>
-      {/* Added anchor icon to splash screen text */}
       <Text style={styles.splashText}>RC Drone Boat ⚓</Text>
     </View>
   );
@@ -125,29 +300,32 @@ const App = () => {
 
       {/* Main Control Area */}
       <View style={styles.controlBody}>
-        {/* Joysticks */}
-        <View style={styles.joystickArea}>
-          <View style={styles.joystickOuter}>
-            <View style={styles.joystickInner} />
-          </View>
-        </View>
+        {/* Left Joystick (Up/Down) */}
+        <Joystick
+          onMove={(x, y) => setLeftJoystick({ x, y })}
+          size={120}
+          axis="vertical"
+        />
 
         {/* Center Content */}
         <View style={styles.controlCenterColumn}>
           <View style={styles.controlMapContainer}>
-            <LeafletMap interactive={false} />
+            <LeafletMap
+              interactive={false}
+              onMapReady={handleMapReady}
+            />
           </View>
           <Pressable style={styles.selectBoatsButton} onPress={() => setShowBoatSelector(true)}>
             <Text style={styles.selectBoatsButtonText}>Select Boats</Text>
           </Pressable>
         </View>
-        
-        {/* Joysticks */}
-        <View style={styles.joystickArea}>
-          <View style={styles.joystickOuter}>
-            <View style={styles.joystickInner} />
-          </View>
-        </View>
+
+        {/* Right Joystick (Left/Right) */}
+        <Joystick
+          onMove={(x, y) => setRightJoystick({ x, y })}
+          size={120}
+          axis="horizontal"
+        />
       </View>
     </View>
   );
@@ -156,7 +334,10 @@ const App = () => {
     <View style={styles.screenContainer}>
       <Text style={styles.screenTitle}>MAP</Text>
       <View style={styles.fullMapContainer}>
-        <LeafletMap interactive={true} />
+        <LeafletMap
+          interactive={true}
+          onMapReady={handleMapReady}
+        />
       </View>
     </View>
   );
@@ -234,7 +415,6 @@ const App = () => {
       {/* Bottom Navigation */}
       <View style={styles.bottomNav}>
         <Pressable style={styles.navButton} onPress={() => setActiveTab('bluetooth')}>
-          {/* Using the runic character `ᛒ` which is the basis for the Bluetooth logo */}
           <Text style={[styles.navIcon, activeTab === 'bluetooth' && styles.activeNavIcon]}>
             ᛒ
           </Text>
