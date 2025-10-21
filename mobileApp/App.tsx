@@ -18,27 +18,33 @@ import {
 import { WebView } from 'react-native-webview';
 import Orientation from 'react-native-orientation-locker';
 import 'react-native-gesture-handler';
-
-// --- Bluetooth Classic Imports ---
 import RNBluetoothClassic, { BluetoothDevice } from 'react-native-bluetooth-classic';
 import { Buffer } from 'buffer';
 global.Buffer = global.Buffer || Buffer;
 
 const { width, height } = Dimensions.get('window');
 
-/** Parse custom E7 format lines: "GPS,<lat_e7>,<lon_e7>" */
+/** Parse GPS data - supports both E7 format and decimal */
 const parseGpsData = (sentence: string) => {
   if (!sentence.startsWith('GPS,')) return null;
   const parts = sentence.split(',');
   if (parts.length !== 3) return null;
 
-  const latE7 = parseInt(parts[1], 10);
-  const lonE7 = parseInt(parts[2], 10);
-  if (isNaN(latE7) || isNaN(lonE7)) return null;
+  // Try E7 format first
+  let lat = parseFloat(parts[1]);
+  let lon = parseFloat(parts[2]);
+  
+  // If values are very large, assume E7 format
+  if (Math.abs(lat) > 1000 || Math.abs(lon) > 1000) {
+    lat = lat / 1e7;
+    lon = lon / 1e7;
+  }
+
+  if (isNaN(lat) || isNaN(lon)) return null;
 
   return {
-    latitude: latE7 / 1e7,
-    longitude: lonE7 / 1e7,
+    latitude: lat,
+    longitude: lon,
     heading: 0,
   };
 };
@@ -211,6 +217,8 @@ const App = () => {
   const [connectedDevice, setConnectedDevice] = useState<BluetoothDevice | null>(null);
   const [receivedData, setReceivedData] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState('Ready to connect');
+  const [lastGPSUpdate, setLastGPSUpdate] = useState<number>(0);
+  const [gpsAge, setGpsAge] = useState<number>(0);
 
   // Classic subscriptions
   const readSubRef = useRef<any>(null);
@@ -218,8 +226,6 @@ const App = () => {
 
   // Buffer for incoming data (line oriented)
   const dataBuffer = useRef('');
-
-  // For Classic, write is per-device; keep a simple flag to show TX/RX readiness in UI
   const writeReady = useRef<boolean>(false);
 
   // --- Map and Position State ---
@@ -238,6 +244,9 @@ const App = () => {
   const lastSentRef = useRef<number>(0);
   const TX_INTERVAL_MS = 60;
 
+  // Auto-connect to JDY-31 on app start
+  const [autoConnectAttempted, setAutoConnectAttempted] = useState(false);
+
   // Compose control frame from joysticks
   const controlFrame = useMemo(() => {
     const throttle = Math.round(-leftJoystick.y * 100);
@@ -253,6 +262,16 @@ const App = () => {
     lastSentRef.current = now;
     writeLine(controlFrame).catch(() => {});
   }, [controlFrame, connectedDevice]);
+
+  // Update GPS age counter every second
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (lastGPSUpdate > 0) {
+        setGpsAge(Date.now() - lastGPSUpdate);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [lastGPSUpdate]);
 
   // Splash
   useEffect(() => {
@@ -287,6 +306,14 @@ const App = () => {
     }
   }, [markerPosition]);
 
+  // Auto-connect to JDY-31 on app start
+  useEffect(() => {
+    if (!autoConnectAttempted && !showSplashScreen) {
+      setAutoConnectAttempted(true);
+      autoConnectToJDY31();
+    }
+  }, [autoConnectAttempted, showSplashScreen]);
+
   // --- Classic helpers ---
   const ensureBtEnabled = async () => {
     const enabled = await RNBluetoothClassic.isBluetoothEnabled();
@@ -300,7 +327,7 @@ const App = () => {
   };
 
   const requestBluetoothPermission = async () => {
-    if (Platform.OS !== 'android') return false; // iOS doesn’t expose Classic SPP to apps
+    if (Platform.OS !== 'android') return false;
     if (Platform.Version >= 31) {
       const res = await PermissionsAndroid.requestMultiple([
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
@@ -317,15 +344,14 @@ const App = () => {
     }
   };
 
-  /** Ensure device is bonded with PIN 1234 before connecting (Android only). */
+  /** Ensure device is bonded before connecting */
   const ensurePaired = async (device: BluetoothDevice): Promise<boolean> => {
     try {
       const bonded = await RNBluetoothClassic.getBondedDevices();
       if (bonded?.some((d) => d.address === device.address)) return true;
 
-      // Try to set the PIN before pairing (best-effort)
       try {
-        // @ts-ignore - optional in some versions
+        // @ts-ignore
         await RNBluetoothClassic.setDevicePin?.(device.address, '1234');
       } catch {}
 
@@ -336,10 +362,38 @@ const App = () => {
     }
   };
 
+  /** Auto-connect to JDY-31 if paired */
+  const autoConnectToJDY31 = async () => {
+    if (Platform.OS !== 'android') return;
+    
+    try {
+      const hasPerm = await requestBluetoothPermission();
+      if (!hasPerm) return;
+
+      const on = await ensureBtEnabled();
+      if (!on) return;
+
+      // Get bonded devices
+      const bonded = await RNBluetoothClassic.getBondedDevices();
+      const jdy31 = bonded?.find(d => 
+        d.name?.includes('JDY-31') || d.name?.includes('JDY31')
+      );
+
+      if (jdy31) {
+        setStatusMessage('Auto-connecting to JDY-31...');
+        await connectToDevice(jdy31);
+      } else {
+        setStatusMessage('JDY-31 not paired. Please scan and connect.');
+      }
+    } catch (e) {
+      console.log('Auto-connect failed:', e);
+    }
+  };
+
   // --- Scan / Connect / Stream ---
   const startScan = async () => {
     if (Platform.OS !== 'android') {
-      setStatusMessage('Bluetooth Classic is Android-only. Use BLE for iOS.');
+      setStatusMessage('Bluetooth Classic is Android-only.');
       return;
     }
     const hasPerm = await requestBluetoothPermission();
@@ -377,7 +431,6 @@ const App = () => {
       setIsScanning(false);
       setStatusMessage(`Connecting to ${device.name || device.address}...`);
 
-      // 1) Make sure adapter is enabled
       const enabled = await RNBluetoothClassic.isBluetoothEnabled();
       if (!enabled) {
         const ok = await RNBluetoothClassic.requestBluetoothEnabled();
@@ -387,35 +440,32 @@ const App = () => {
         }
       }
 
-      // 2) Ensure bonding with PIN 1234
       const paired = await ensurePaired(device);
       if (!paired) {
-        setStatusMessage('Pairing failed. Try pairing in system settings using PIN 1234.');
+        setStatusMessage('Pairing failed. Try system settings with PIN 1234.');
         Alert.alert(
           'Pairing required',
-          'Open Android Settings → Bluetooth, pair with the device using PIN 1234, then come back and tap it again.'
+          'Open Settings → Bluetooth, pair using PIN 1234, then reconnect.'
         );
         return;
       }
 
-      // 3) Open RFCOMM socket with newline delimiter
       const ok = await RNBluetoothClassic.connectToDevice(device.address, { delimiter: '\n' });
       if (!ok) throw new Error('Connect failed');
 
       setConnectedDevice(device);
       writeReady.current = true;
-      setStatusMessage(`Connected to ${device.name || device.address}`);
+      setStatusMessage(`✓ Connected to ${device.name || device.address}`);
       setReceivedData('');
       dataBuffer.current = '';
 
-      // 4) Subscribe to incoming lines (CORRECT signature: callback only)
+      // Subscribe to incoming data
       readSubRef.current?.remove?.();
       readSubRef.current = RNBluetoothClassic.onDeviceRead((ev: any) => {
         if (!ev || ev.device?.address !== device.address) return;
         const chunk = String(ev.data ?? '');
         dataBuffer.current += chunk;
 
-        // process by newline
         while (true) {
           const idx = dataBuffer.current.indexOf('\n');
           if (idx < 0) break;
@@ -423,22 +473,24 @@ const App = () => {
           dataBuffer.current = dataBuffer.current.substring(idx + 1);
           if (!sentence) continue;
 
-          setReceivedData((prev) => `${prev}\n> ${sentence}`.slice(-1500));
-          const gps = parseGpsData(sentence);
-          if (gps) setMarkerPosition(gps);
+          processReceivedLine(sentence);
         }
       });
 
-      // 5) Handle disconnect (CORRECT signature: callback only)
+      // Handle disconnect
       dcSubRef.current?.remove?.();
       dcSubRef.current = RNBluetoothClassic.onDeviceDisconnected((ev: any) => {
         if (ev?.device?.address === device.address) {
-          setStatusMessage('Disconnected.');
+          setStatusMessage('⚠ Disconnected');
           setConnectedDevice(null);
           writeReady.current = false;
           readSubRef.current?.remove?.();
         }
       });
+
+      // Request initial status
+      setTimeout(() => writeLine('STATUS\n'), 500);
+      
     } catch (error: any) {
       setStatusMessage(`Connection Error: ${error?.message || String(error)}`);
       Alert.alert('Connection Error', error?.message || String(error));
@@ -457,17 +509,73 @@ const App = () => {
         dataBuffer.current = '';
         writeReady.current = false;
         setStatusMessage('Device disconnected');
+        setLastGPSUpdate(0);
+        setGpsAge(0);
       });
   };
 
-  /** Write a full text line to the boat (Classic SPP). */
+  /** Process received lines from bridge */
+  const processReceivedLine = (line: string) => {
+    // Add to log (ignore heartbeats)
+    if (!line.includes('HEARTBEAT')) {
+      setReceivedData((prev) => `${prev}\n> ${line}`.slice(-2000));
+    }
+
+    // Parse GPS data
+    const gps = parseGpsData(line);
+    if (gps) {
+      setMarkerPosition(gps);
+      setLastGPSUpdate(Date.now());
+      setStatusMessage(`✓ GPS Updated: ${gps.latitude.toFixed(6)}, ${gps.longitude.toFixed(6)}`);
+      return;
+    }
+
+    // Handle acknowledgments
+    if (line.startsWith('ACK,')) {
+      const ackType = line.substring(4);
+      setReceivedData((prev) => `${prev}\n✓ ACK: ${ackType}`.slice(-2000));
+      return;
+    }
+
+    // Handle PONG
+    if (line === 'PONG') {
+      setReceivedData((prev) => `${prev}\n✓ PONG received`.slice(-2000));
+      return;
+    }
+
+    // Handle STATUS responses
+    if (line.startsWith('STATUS,')) {
+      setStatusMessage(`Status: ${line.substring(7)}`);
+      return;
+    }
+
+    // System messages
+    if (line.startsWith('SYSTEM,')) {
+      setStatusMessage(line.substring(7));
+      return;
+    }
+  };
+
+  /** Write a full text line to the boat */
   const writeLine = async (text: string) => {
     if (!connectedDevice || !writeReady.current) return;
     try {
       await RNBluetoothClassic.writeToDevice(connectedDevice.address, text);
-    } catch {
-      // Ignore throttled joystick errors; manual sends would show an Alert if you add one here.
+    } catch (e) {
+      console.log('Write error:', e);
     }
+  };
+
+  /** Send PING command */
+  const sendPing = () => {
+    writeLine('PING\n');
+    setReceivedData((prev) => `${prev}\n→ PING`.slice(-2000));
+  };
+
+  /** Request status */
+  const requestStatus = () => {
+    writeLine('STATUS\n');
+    setReceivedData((prev) => `${prev}\n→ STATUS`.slice(-2000));
   };
 
   // --- UI Screens ---
@@ -477,92 +585,136 @@ const App = () => {
     </View>
   );
 
-  const renderBluetoothScreen = () => (
-    <View style={styles.screenContainer}>
-      <Text style={styles.screenTitle}>BLUETOOTH</Text>
-      <View style={styles.bluetoothContent}>
-        <View style={styles.statusBox}>
-          <Text style={styles.statusText}>{statusMessage}</Text>
-        </View>
+  const renderBluetoothScreen = () => {
+    const isGPSFresh = lastGPSUpdate > 0 && gpsAge < 10000;
+    
+    return (
+      <View style={styles.screenContainer}>
+        <Text style={styles.screenTitle}>BLUETOOTH</Text>
+        <View style={styles.bluetoothContent}>
+          {/* Status Box */}
+          <View style={styles.statusBox}>
+            <Text style={styles.statusText}>{statusMessage}</Text>
+            {connectedDevice && lastGPSUpdate > 0 && (
+              <Text style={[styles.gpsAgeText, !isGPSFresh && styles.gpsStale]}>
+                GPS: {isGPSFresh ? `${(gpsAge / 1000).toFixed(0)}s ago` : 'STALE'}
+              </Text>
+            )}
+          </View>
 
-        {!connectedDevice ? (
-          <>
-            <View style={{ width: '100%', gap: 10 }}>
-              <Pressable
-                style={styles.actionButton}
-                onPress={startScan}
-                disabled={isScanning}
-              >
-                {isScanning ? <ActivityIndicator color="white" /> : <Text style={styles.actionButtonText}>Scan (Show All)</Text>}
-              </Pressable>
-            </View>
-
-            <FlatList
-              data={scannedDevices}
-              keyExtractor={(item) => item.address}
-              renderItem={({ item }) => (
-                <Pressable style={styles.deviceItem} onPress={() => connectToDevice(item)}>
-                  <Text style={styles.deviceText}>{item.name || 'Unknown Device'}</Text>
-                  <Text style={styles.deviceTextSmall}>{item.address}</Text>
+          {!connectedDevice ? (
+            <>
+              <View style={{ width: '100%', gap: 10 }}>
+                <Pressable
+                  style={styles.actionButton}
+                  onPress={startScan}
+                  disabled={isScanning}
+                >
+                  {isScanning ? (
+                    <ActivityIndicator color="white" />
+                  ) : (
+                    <Text style={styles.actionButtonText}>Scan for Devices</Text>
+                  )}
                 </Pressable>
-              )}
-              ListEmptyComponent={<Text style={styles.emptyListText}>No devices found. Scan to search.</Text>}
-              style={styles.deviceList}
-            />
-          </>
-        ) : (
-          <View style={styles.connectedView}>
-            <Pressable style={[styles.actionButton, styles.disconnectButton]} onPress={disconnectDevice}>
-              <Text style={styles.actionButtonText}>Disconnect</Text>
-            </Pressable>
-            <Text style={styles.dataTitle}>Received Data:</Text>
-            <ScrollView style={styles.dataBox}>
-              <Text style={styles.dataText}>{receivedData || 'No data yet...'}</Text>
-            </ScrollView>
-          </View>
-        )}
-      </View>
-    </View>
-  );
+                
+                <Pressable
+                  style={[styles.actionButton, styles.secondaryButton]}
+                  onPress={autoConnectToJDY31}
+                >
+                  <Text style={styles.actionButtonText}>Auto-Connect to JDY-31</Text>
+                </Pressable>
+              </View>
 
-  const renderControlScreen = () => (
-    <View style={styles.screenContainer}>
-      <View style={styles.controlHeader}>
-        <Pressable onPress={() => setShowSettings(true)}>
-          <Text style={styles.headerIcon}>⚙</Text>
-        </Pressable>
+              <FlatList
+                data={scannedDevices}
+                keyExtractor={(item) => item.address}
+                renderItem={({ item }) => (
+                  <Pressable style={styles.deviceItem} onPress={() => connectToDevice(item)}>
+                    <Text style={styles.deviceText}>{item.name || 'Unknown Device'}</Text>
+                    <Text style={styles.deviceTextSmall}>{item.address}</Text>
+                  </Pressable>
+                )}
+                ListEmptyComponent={
+                  <Text style={styles.emptyListText}>
+                    No devices found. Tap scan or auto-connect.
+                  </Text>
+                }
+                style={styles.deviceList}
+              />
+            </>
+          ) : (
+            <View style={styles.connectedView}>
+              {/* Quick Actions */}
+              <View style={styles.quickActions}>
+                <Pressable style={styles.quickButton} onPress={sendPing}>
+                  <Text style={styles.quickButtonText}>PING</Text>
+                </Pressable>
+                <Pressable style={styles.quickButton} onPress={requestStatus}>
+                  <Text style={styles.quickButtonText}>STATUS</Text>
+                </Pressable>
+              </View>
 
-        <View style={{ alignItems: 'center' }}>
-          <Text style={{ fontWeight: '700' }}>{connectedDevice ? (connectedDevice.name || connectedDevice.address) : 'Not connected'}</Text>
-          <Text style={{ fontSize: 12, color: '#666' }}>
-            {writeReady.current ? 'TX/RX ready' : 'Waiting for connection'}
-          </Text>
+              <Pressable style={[styles.actionButton, styles.disconnectButton]} onPress={disconnectDevice}>
+                <Text style={styles.actionButtonText}>Disconnect</Text>
+              </Pressable>
+              
+              <Text style={styles.dataTitle}>Received Data:</Text>
+              <ScrollView style={styles.dataBox}>
+                <Text style={styles.dataText}>{receivedData || 'Waiting for data...'}</Text>
+              </ScrollView>
+            </View>
+          )}
         </View>
-
-        <Pressable style={styles.returnButton} onPress={() => writeLine('RETURN\n')}>
-          <Text style={styles.returnButtonText}>Return Boat</Text>
-        </Pressable>
       </View>
+    );
+  };
 
-      <View style={styles.controlBody}>
-        {/* Throttle (vertical) */}
-        <Joystick onMove={(x, y) => setLeftJoystick({ x, y })} size={140} axis="vertical" />
+  const renderControlScreen = () => {
+    const isGPSFresh = lastGPSUpdate > 0 && gpsAge < 10000;
+    
+    return (
+      <View style={styles.screenContainer}>
+        <View style={styles.controlHeader}>
+          <Pressable onPress={() => setShowSettings(true)}>
+            <Text style={styles.headerIcon}>⚙</Text>
+          </Pressable>
 
-        {/* Map + select */}
-        <View style={styles.controlCenterColumn}>
-          <View style={styles.controlMapContainer}>
-            <LeafletMap interactive={false} onMapReady={(ref) => { mapRef.current = ref.current; }} />
+          <View style={{ alignItems: 'center' }}>
+            <Text style={{ fontWeight: '700' }}>
+              {connectedDevice ? (connectedDevice.name || connectedDevice.address) : 'Not connected'}
+            </Text>
+            <Text style={{ fontSize: 12, color: writeReady.current ? '#00aa00' : '#666' }}>
+              {writeReady.current ? '● TX/RX Ready' : '○ Waiting...'}
+            </Text>
+            {lastGPSUpdate > 0 && (
+              <Text style={[styles.gpsAgeSmall, !isGPSFresh && styles.gpsStale]}>
+                GPS: {isGPSFresh ? `${(gpsAge / 1000).toFixed(0)}s` : 'STALE'}
+              </Text>
+            )}
           </View>
-          <Pressable style={styles.selectBoatsButton} onPress={() => setShowBoatSelector(true)}>
-            <Text style={styles.selectBoatsButtonText}>Select Boats</Text>
+
+          <Pressable style={styles.returnButton} onPress={() => writeLine('RETURN\n')}>
+            <Text style={styles.returnButtonText}>Return Boat</Text>
           </Pressable>
         </View>
 
-        {/* Steering (horizontal) */}
-        <Joystick onMove={(x, y) => setRightJoystick({ x, y })} size={140} axis="horizontal" />
+        <View style={styles.controlBody}>
+          <Joystick onMove={(x, y) => setLeftJoystick({ x, y })} size={140} axis="vertical" />
+
+          <View style={styles.controlCenterColumn}>
+            <View style={styles.controlMapContainer}>
+              <LeafletMap interactive={false} onMapReady={(ref) => { mapRef.current = ref.current; }} />
+            </View>
+            <Pressable style={styles.selectBoatsButton} onPress={() => setShowBoatSelector(true)}>
+              <Text style={styles.selectBoatsButtonText}>Select Boats</Text>
+            </Pressable>
+          </View>
+
+          <Joystick onMove={(x, y) => setRightJoystick({ x, y })} size={140} axis="horizontal" />
+        </View>
       </View>
-    </View>
-  );
+    );
+  };
 
   const renderMapScreen = () => (
     <View style={styles.screenContainer}>
@@ -598,11 +750,25 @@ const App = () => {
         <Text style={styles.settingsTitle}>SETTINGS</Text>
         <View style={styles.settingsContent}>
           <Pressable style={styles.settingsButton} onPress={() => writeLine('SPEED,MAX,60\n')}>
-            <Text style={styles.settingsButtonText}>Set Max Boat Speed (demo)</Text>
+            <Text style={styles.settingsButtonText}>Set Max Speed (Demo)</Text>
           </Pressable>
           <Pressable style={styles.settingsButton} onPress={() => writeLine('CALIBRATE\n')}>
             <Text style={styles.settingsButtonText}>Calibrate</Text>
           </Pressable>
+          <Pressable style={styles.settingsButton} onPress={sendPing}>
+            <Text style={styles.settingsButtonText}>Send PING</Text>
+          </Pressable>
+          <Pressable style={styles.settingsButton} onPress={requestStatus}>
+            <Text style={styles.settingsButtonText}>Request STATUS</Text>
+          </Pressable>
+          
+          {connectedDevice && (
+            <View style={styles.deviceInfoBox}>
+              <Text style={styles.deviceInfoTitle}>Connected Device</Text>
+              <Text style={styles.deviceInfoText}>Name: {connectedDevice.name}</Text>
+              <Text style={styles.deviceInfoText}>Address: {connectedDevice.address}</Text>
+            </View>
+          )}
         </View>
         <Pressable style={styles.settingsCloseButton} onPress={() => setShowSettings(false)}>
           <Text style={styles.settingsCloseButtonText}>Close</Text>
@@ -613,7 +779,6 @@ const App = () => {
 
   if (showSplashScreen) return renderSplashScreen();
 
-  // --- Main Layout ---
   return (
     <SafeAreaView style={styles.appContainer}>
       {renderBoatSelectorModal()}
@@ -700,6 +865,9 @@ const styles = StyleSheet.create({
   bluetoothContent: { flex: 1, alignItems: 'center', paddingHorizontal: 20, paddingBottom: 20 },
   statusBox: { backgroundColor: '#f0f0f0', padding: 15, borderRadius: 10, width: '100%', marginBottom: 10, alignItems: 'center' },
   statusText: { fontSize: 16, color: '#333', textAlign: 'center' },
+  gpsAgeText: { fontSize: 12, color: '#00aa00', marginTop: 4, fontWeight: '600' },
+  gpsAgeSmall: { fontSize: 10, color: '#00aa00', marginTop: 2 },
+  gpsStale: { color: '#cc0000' },
 
   actionButton: { backgroundColor: '#007AFF', paddingVertical: 16, width: '100%', borderRadius: 12, alignItems: 'center', justifyContent: 'center', minHeight: 54 },
   secondaryButton: { backgroundColor: '#1A73E8' },
@@ -716,6 +884,14 @@ const styles = StyleSheet.create({
   dataTitle: { fontSize: 18, fontWeight: '600', marginTop: 10, marginBottom: 10, alignSelf: 'flex-start' },
   dataBox: { width: '100%', flex: 1, backgroundColor: '#2b2b2b', borderRadius: 10, padding: 10, borderWidth: 1, borderColor: '#444' },
   dataText: { fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 14, color: '#00ff41' },
+  
+  quickActions: { flexDirection: 'row', gap: 10, width: '100%', marginBottom: 10 },
+  quickButton: { flex: 1, backgroundColor: '#1A73E8', paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
+  quickButtonText: { color: 'white', fontSize: 14, fontWeight: '600' },
+  
+  deviceInfoBox: { backgroundColor: '#f8f8f8', padding: 15, borderRadius: 8, marginTop: 20, width: '100%' },
+  deviceInfoTitle: { fontSize: 16, fontWeight: '700', marginBottom: 8, color: '#000' },
+  deviceInfoText: { fontSize: 14, color: '#666', marginBottom: 4 },
 });
 
 export default App;
