@@ -450,43 +450,50 @@ const App = () => {
         return;
       }
 
-      const ok = await RNBluetoothClassic.connectToDevice(device.address, { delimiter: '\n' });
-      if (!ok) throw new Error('Connect failed');
+      // Subscribe to incoming data BEFORE connecting
+      readSubRef.current?.remove?.();
+      readSubRef.current = device.onDeviceRead((data: any) => {
+        try {
+          const chunk = String(data ?? '');
+          dataBuffer.current += chunk;
+
+          while (true) {
+            const idx = dataBuffer.current.indexOf('\n');
+            if (idx < 0) break;
+            const sentence = dataBuffer.current.substring(0, idx).trim();
+            dataBuffer.current = dataBuffer.current.substring(idx + 1);
+            if (!sentence) continue;
+
+            processReceivedLine(sentence);
+          }
+        } catch (e) {
+          console.log('Read error:', e);
+        }
+      });
+
+      // Handle disconnect BEFORE connecting
+      dcSubRef.current?.remove?.();
+      dcSubRef.current = device.onDeviceDisconnected(() => {
+        setStatusMessage('⚠ Disconnected');
+        setConnectedDevice(null);
+        writeReady.current = false;
+        readSubRef.current?.remove?.();
+        dcSubRef.current?.remove?.();
+      });
+
+      // Now connect
+      const ok = await device.connect({ delimiter: '\n' });
+      if (!ok) {
+        readSubRef.current?.remove?.();
+        dcSubRef.current?.remove?.();
+        throw new Error('Connect failed');
+      }
 
       setConnectedDevice(device);
       writeReady.current = true;
       setStatusMessage(`✓ Connected to ${device.name || device.address}`);
       setReceivedData('');
       dataBuffer.current = '';
-
-      // Subscribe to incoming data
-      readSubRef.current?.remove?.();
-      readSubRef.current = RNBluetoothClassic.onDeviceRead((ev: any) => {
-        if (!ev || ev.device?.address !== device.address) return;
-        const chunk = String(ev.data ?? '');
-        dataBuffer.current += chunk;
-
-        while (true) {
-          const idx = dataBuffer.current.indexOf('\n');
-          if (idx < 0) break;
-          const sentence = dataBuffer.current.substring(0, idx).trim();
-          dataBuffer.current = dataBuffer.current.substring(idx + 1);
-          if (!sentence) continue;
-
-          processReceivedLine(sentence);
-        }
-      });
-
-      // Handle disconnect
-      dcSubRef.current?.remove?.();
-      dcSubRef.current = RNBluetoothClassic.onDeviceDisconnected((ev: any) => {
-        if (ev?.device?.address === device.address) {
-          setStatusMessage('⚠ Disconnected');
-          setConnectedDevice(null);
-          writeReady.current = false;
-          readSubRef.current?.remove?.();
-        }
-      });
 
       // Request initial status
       setTimeout(() => writeLine('STATUS\n'), 500);
@@ -497,21 +504,25 @@ const App = () => {
     }
   };
 
-  const disconnectDevice = () => {
+  const disconnectDevice = async () => {
     if (!connectedDevice) return;
-    readSubRef.current?.remove?.();
-    dcSubRef.current?.remove?.();
-    RNBluetoothClassic.disconnectFromDevice(connectedDevice.address)
-      .catch(() => {})
-      .finally(() => {
-        setConnectedDevice(null);
-        setReceivedData('');
-        dataBuffer.current = '';
-        writeReady.current = false;
-        setStatusMessage('Device disconnected');
-        setLastGPSUpdate(0);
-        setGpsAge(0);
-      });
+    
+    try {
+      readSubRef.current?.remove?.();
+      dcSubRef.current?.remove?.();
+      
+      await connectedDevice.disconnect();
+      
+      setConnectedDevice(null);
+      setReceivedData('');
+      dataBuffer.current = '';
+      writeReady.current = false;
+      setStatusMessage('Device disconnected');
+      setLastGPSUpdate(0);
+      setGpsAge(0);
+    } catch (e) {
+      console.log('Disconnect error:', e);
+    }
   };
 
   /** Process received lines from bridge */
@@ -558,9 +569,12 @@ const App = () => {
 
   /** Write a full text line to the boat */
   const writeLine = async (text: string) => {
-    if (!connectedDevice || !writeReady.current) return;
+    if (!connectedDevice || !writeReady.current) {
+      console.log('Not ready to write');
+      return;
+    }
     try {
-      await RNBluetoothClassic.writeToDevice(connectedDevice.address, text);
+      await connectedDevice.write(text);
     } catch (e) {
       console.log('Write error:', e);
     }
