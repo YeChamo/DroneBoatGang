@@ -1,6 +1,25 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Internet for your app / maps / APIs -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- BLUETOOTH: for Classic SPP, include legacy + Android 12+ permissions -->
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+
+    <!-- Android 12+ (API 31+): runtime permissions you already request in code -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- Discovery on older Android versions still requires location -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- (Optional) Declare Bluetooth features; set required=false so the app can install on devices without BT -->
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    <!-- If you also support BLE elsewhere, keep this false so Play allows non-BLE devices -->
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 
     <application
         android:name=".MainApplication"
@@ -9,8 +28,9 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:allowBackup="false"
         android:theme="@style/AppTheme"
-        android:supportsRtl="true">
+        android:supportsRtl="true"
         android:usesCleartextTraffic="true">
+
         <activity
             android:name=".MainActivity"
             android:label="@string/app_name"
@@ -23,5 +43,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
     </application>
 </manifest>
