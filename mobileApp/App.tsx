@@ -7,16 +7,40 @@ import {
   View,
   Modal,
   Dimensions,
-  PanResponder
+  PanResponder,
+  Alert,
+  Platform,
+  PermissionsAndroid,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import Orientation from 'react-native-orientation-locker';
 import 'react-native-gesture-handler';
-
+import RNBluetoothClassic, { BluetoothDevice } from 'react-native-bluetooth-classic';
 
 const { width, height } = Dimensions.get('window');
 
-// --- Leaflet Map Component ---
+const ensureBtPermissions = async () => {
+  if (Platform.OS !== 'android') return true;
+  const api = Platform.Version as number;
+  if (api >= 31) {
+    const scan = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN
+    );
+    const conn = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT
+    );
+    return (
+      scan === PermissionsAndroid.RESULTS.GRANTED &&
+      conn === PermissionsAndroid.RESULTS.GRANTED
+    );
+  } else {
+    const loc = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
+    );
+    return loc === PermissionsAndroid.RESULTS.GRANTED;
+  }
+};
+
 const LeafletMap = React.memo(({ onMapReady, interactive = true }) => {
   const webViewRef = useRef(null);
   const [mapInitialized, setMapInitialized] = useState(false);
@@ -52,7 +76,6 @@ const LeafletMap = React.memo(({ onMapReady, interactive = true }) => {
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     let map, boatMarker;
-
     function initMap() {
       map = L.map('map', {
         zoomControl: ${interactive},
@@ -61,37 +84,26 @@ const LeafletMap = React.memo(({ onMapReady, interactive = true }) => {
         scrollWheelZoom: ${interactive},
         doubleClickZoom: ${interactive}
       }).setView([36.0687, -94.1748], 17);
-
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-
       const boatIcon = L.divIcon({
         className: '',
         html: '<div class="boat-marker"></div>',
         iconSize: [30, 30],
         iconAnchor: [15, 20],
       });
-
       boatMarker = L.marker([36.0687, -94.1748], { icon: boatIcon }).addTo(map);
-
       window.updateBoat = (lat, lng, heading) => {
-        if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
-          console.error('Invalid coordinates:', lat, lng);
-          return;
-        }
+        if (!lat || !lng || isNaN(lat) || isNaN(lng)) return;
         boatMarker.setLatLng([lat, lng]);
         const el = boatMarker.getElement();
         if (el) {
           const marker = el.querySelector('.boat-marker');
-          if (marker) {
-            marker.style.transform = 'rotate(' + heading + 'deg)';
-          }
+          if (marker) marker.style.transform = 'rotate(' + heading + 'deg)';
         }
         map.setView([lat, lng], map.getZoom(), { animate: false });
       };
-
       window.ReactNativeWebView.postMessage('mapReady');
     }
-
     initMap();
   </script>
 </body>
@@ -113,8 +125,6 @@ const LeafletMap = React.memo(({ onMapReady, interactive = true }) => {
   );
 });
 
-
-// --- Joystick Component ---
 const Joystick = ({ onMove, size = 120, axis = 'both' }) => {
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const maxDistance = size / 2 - 30;
@@ -126,12 +136,11 @@ const Joystick = ({ onMove, size = 120, axis = 'both' }) => {
       onPanResponderMove: (evt, gestureState) => {
         let x = gestureState.dx;
         let y = gestureState.dy;
-
         if (axis === 'vertical') {
-          x = 0; //
+          x = 0;
           y = Math.max(-maxDistance, Math.min(maxDistance, y));
         } else if (axis === 'horizontal') {
-          y = 0; //
+          y = 0;
           x = Math.max(-maxDistance, Math.min(maxDistance, x));
         } else {
           const distance = Math.sqrt(x * x + y * y);
@@ -141,12 +150,9 @@ const Joystick = ({ onMove, size = 120, axis = 'both' }) => {
             y = Math.sin(angle) * maxDistance;
           }
         }
-
         setPosition({ x, y });
-
         const normalizedX = x / maxDistance;
         const normalizedY = y / maxDistance;
-
         onMove(normalizedX, normalizedY);
       },
       onPanResponderRelease: () => {
@@ -173,39 +179,78 @@ const Joystick = ({ onMove, size = 120, axis = 'both' }) => {
   );
 };
 
-// --- Main App Component ---
 const App = () => {
   const [showSplashScreen, setShowSplashScreen] = useState(true);
   const [activeTab, setActiveTab] = useState('bluetooth');
   const [showBoatSelector, setShowBoatSelector] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-
   const [markerPosition, setMarkerPosition] = useState({
     latitude: 36.0687,
     longitude: -94.1748,
-    heading: 0
+    heading: 0,
   });
-
-
   const [leftJoystick, setLeftJoystick] = useState({ x: 0, y: 0 });
   const [rightJoystick, setRightJoystick] = useState({ x: 0, y: 0 });
-
-
   const mapRef = useRef(null);
   const [mapInitialized, setMapInitialized] = useState(false);
+  const [connected, setConnected] = useState<BluetoothDevice | null>(null);
+  const lastCmd = useRef<string>('');
 
+  const sendCmd = async (cmd: string) => {
+    if (!connected) return;
+    if (cmd === lastCmd.current) return;
+    lastCmd.current = cmd;
+    try {
+      await connected.write(cmd + '\n');
+    } catch {}
+  };
+
+  const pickCmdFromJoysticks = (lx: number, ly: number, rx: number, ry: number) => {
+    if (ly < -0.5) return '1';
+    if (ly > 0.5) return '2';
+    if (rx < -0.5) return '3';
+    if (rx > 0.5) return '4';
+    return '';
+  };
+
+  const quickConnect = async () => {
+    try {
+      const ok = await ensureBtPermissions();
+      if (!ok) {
+        Alert.alert('Permissions', 'Bluetooth permissions denied.');
+        return;
+      }
+      const enabled = await RNBluetoothClassic.isBluetoothEnabled();
+      if (!enabled) {
+        const turnedOn = await RNBluetoothClassic.requestBluetoothEnabled();
+        if (!turnedOn) {
+          Alert.alert('Bluetooth', 'Please enable Bluetooth');
+          return;
+        }
+      }
+      const bonded = await RNBluetoothClassic.getBondedDevices();
+      let target =
+        bonded.find((d) => /JDY|HC-0[56]/i.test(d.name ?? '')) || bonded[0];
+      if (!target) {
+        Alert.alert('No paired device', 'Pair JDY-31 in Android Bluetooth settings first.');
+        return;
+      }
+      const dev = await RNBluetoothClassic.connectToDevice(target.address, { delimiter: '\n' });
+      setConnected(dev);
+      Alert.alert('Connected', `${dev.name ?? 'Device'} @ ${dev.address}`);
+    } catch (e: any) {
+      Alert.alert('Connect error', String(e?.message ?? e));
+    }
+  };
 
   useEffect(() => {
-    const timer = setTimeout(() => setShowSplashScreen(false), 2000);
-    return () => clearTimeout(timer);
+    const t = setTimeout(() => setShowSplashScreen(false), 2000);
+    return () => clearTimeout(t);
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'control') {
-      Orientation.lockToLandscape();
-    } else {
-      Orientation.lockToPortrait();
-    }
+    if (activeTab === 'control') Orientation.lockToLandscape();
+    else Orientation.lockToPortrait();
     return () => {
       Orientation.lockToPortrait();
     };
@@ -214,52 +259,45 @@ const App = () => {
   useEffect(() => {
     const interval = setInterval(() => {
       if ((leftJoystick.y !== 0 || rightJoystick.x !== 0) && mapRef.current && mapInitialized) {
-        setMarkerPosition(prev => {
-          // SPEEDS
-          const moveSpeed = 0.00005; // How fast boat moves
-          const rotationSpeed = 5;   // How fast boat rotates
-
-          // RIGHT JOYSTICK:
+        setMarkerPosition((prev) => {
+          const moveSpeed = 0.00005;
+          const rotationSpeed = 5;
           const newHeading = (prev.heading + rightJoystick.x * rotationSpeed + 360) % 360;
-
-          // LEFT JOYSTICK:
           let newLat = prev.latitude;
           let newLng = prev.longitude;
-
-
           if (leftJoystick.y !== 0) {
             const headingRad = (prev.heading * Math.PI) / 180;
-
             const moveDistance = -leftJoystick.y * moveSpeed;
-
             newLat = prev.latitude + Math.cos(headingRad) * moveDistance;
             newLng = prev.longitude + Math.sin(headingRad) * moveDistance;
           }
-
           if (mapRef.current && mapInitialized) {
             mapRef.current.injectJavaScript(
               `window.updateBoat(${newLat}, ${newLng}, ${newHeading}); true;`
             );
           }
-
-          return {
-            latitude: newLat,
-            longitude: newLng,
-            heading: newHeading
-          };
+          return { latitude: newLat, longitude: newLng, heading: newHeading };
         });
       }
     }, 50);
-
     return () => clearInterval(interval);
   }, [leftJoystick, rightJoystick, mapInitialized]);
 
+  useEffect(() => {
+    const cmd = pickCmdFromJoysticks(
+      leftJoystick.x,
+      leftJoystick.y,
+      rightJoystick.x,
+      rightJoystick.y
+    );
+    if (cmd) sendCmd(cmd);
+    else lastCmd.current = '';
+  }, [leftJoystick, rightJoystick, connected]);
+
   const handleMapReady = (ref) => {
     mapRef.current = ref.current;
-    // Give the map a moment to fully initialize
     setTimeout(() => {
       setMapInitialized(true);
-      // Initialize the marker at the correct position
       if (ref.current) {
         ref.current.injectJavaScript(
           `window.updateBoat(${markerPosition.latitude}, ${markerPosition.longitude}, ${markerPosition.heading}); true;`
@@ -268,7 +306,6 @@ const App = () => {
     }, 500);
   };
 
-  // --- Screens ---
   const renderSplashScreen = () => (
     <View style={styles.splashContainer}>
       <Text style={styles.splashText}>RC Drone Boat ⚓</Text>
@@ -279,8 +316,10 @@ const App = () => {
     <View style={styles.screenContainer}>
       <Text style={styles.screenTitle}>BLUETOOTH</Text>
       <View style={styles.centeredContent}>
-        <Pressable style={styles.connectButton}>
-          <Text style={styles.connectButtonText}>Connect Device</Text>
+        <Pressable style={styles.connectButton} onPress={quickConnect}>
+          <Text style={styles.connectButtonText}>
+            {connected ? 'Connected' : 'Connect Device'}
+          </Text>
         </Pressable>
       </View>
     </View>
@@ -288,7 +327,6 @@ const App = () => {
 
   const renderControlScreen = () => (
     <View style={styles.screenContainer}>
-      {/* Header */}
       <View style={styles.controlHeader}>
         <Pressable onPress={() => setShowSettings(true)}>
           <Text style={styles.headerIcon}>⚙</Text>
@@ -297,35 +335,17 @@ const App = () => {
           <Text style={styles.returnButtonText}>Return Boats</Text>
         </Pressable>
       </View>
-
-      {/* Main Control Area */}
       <View style={styles.controlBody}>
-        {/* Left Joystick (Up/Down) */}
-        <Joystick
-          onMove={(x, y) => setLeftJoystick({ x, y })}
-          size={120}
-          axis="vertical"
-        />
-
-        {/* Center Content */}
+        <Joystick onMove={(x, y) => setLeftJoystick({ x, y })} size={120} axis="vertical" />
         <View style={styles.controlCenterColumn}>
           <View style={styles.controlMapContainer}>
-            <LeafletMap
-              interactive={false}
-              onMapReady={handleMapReady}
-            />
+            <LeafletMap interactive={false} onMapReady={handleMapReady} />
           </View>
           <Pressable style={styles.selectBoatsButton} onPress={() => setShowBoatSelector(true)}>
             <Text style={styles.selectBoatsButtonText}>Select Boats</Text>
           </Pressable>
         </View>
-
-        {/* Right Joystick (Left/Right) */}
-        <Joystick
-          onMove={(x, y) => setRightJoystick({ x, y })}
-          size={120}
-          axis="horizontal"
-        />
+        <Joystick onMove={(x, y) => setRightJoystick({ x, y })} size={120} axis="horizontal" />
       </View>
     </View>
   );
@@ -334,15 +354,11 @@ const App = () => {
     <View style={styles.screenContainer}>
       <Text style={styles.screenTitle}>MAP</Text>
       <View style={styles.fullMapContainer}>
-        <LeafletMap
-          interactive={true}
-          onMapReady={handleMapReady}
-        />
+        <LeafletMap interactive={true} onMapReady={handleMapReady} />
       </View>
     </View>
   );
 
-  // --- Modals ---
   const renderBoatSelectorModal = () => (
     <Modal
       animationType="fade"
@@ -380,12 +396,12 @@ const App = () => {
       <SafeAreaView style={styles.settingsContainer}>
         <Text style={styles.settingsTitle}>SETTINGS</Text>
         <View style={styles.settingsContent}>
-            <Pressable style={styles.settingsButton}>
-                <Text style={styles.settingsButtonText}>Max Boat Speed</Text>
-            </Pressable>
-            <Pressable style={styles.settingsButton}>
-                <Text style={styles.settingsButtonText}>Anything Else We May Want to Include</Text>
-            </Pressable>
+          <Pressable style={styles.settingsButton}>
+            <Text style={styles.settingsButtonText}>Max Boat Speed</Text>
+          </Pressable>
+          <Pressable style={styles.settingsButton}>
+            <Text style={styles.settingsButtonText}>Anything Else We May Want to Include</Text>
+          </Pressable>
         </View>
         <Pressable style={styles.settingsCloseButton} onPress={() => setShowSettings(false)}>
           <Text style={styles.settingsCloseButtonText}>Close</Text>
@@ -394,25 +410,17 @@ const App = () => {
     </Modal>
   );
 
-  if (showSplashScreen) {
-    return renderSplashScreen();
-  }
+  if (showSplashScreen) return renderSplashScreen();
 
-  // --- Main Layout ---
   return (
     <SafeAreaView style={styles.appContainer}>
-      {/* Modals */}
       {renderBoatSelectorModal()}
       {renderSettingsModal()}
-
-      {/* Main Content */}
       <View style={styles.mainContent}>
         {activeTab === 'bluetooth' && renderBluetoothScreen()}
         {activeTab === 'control' && renderControlScreen()}
         {activeTab === 'map' && renderMapScreen()}
       </View>
-
-      {/* Bottom Navigation */}
       <View style={styles.bottomNav}>
         <Pressable style={styles.navButton} onPress={() => setActiveTab('bluetooth')}>
           <Text style={[styles.navIcon, activeTab === 'bluetooth' && styles.activeNavIcon]}>
@@ -436,9 +444,7 @@ const App = () => {
   );
 };
 
-// --- Styles ---
 const styles = StyleSheet.create({
-  // Containers
   splashContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -461,7 +467,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  // Typography
   splashText: {
     fontSize: 32,
     fontWeight: 'bold',
@@ -474,7 +479,6 @@ const styles = StyleSheet.create({
     marginVertical: 20,
     color: '#000',
   },
-  // Bluetooth Screen
   connectButton: {
     backgroundColor: '#000',
     paddingVertical: 18,
@@ -486,7 +490,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
   },
-  // Control Screen (Landscape)
   controlHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -566,13 +569,11 @@ const styles = StyleSheet.create({
     borderRadius: 30,
     backgroundColor: '#E0E0E0',
   },
-  // Map Screen
   fullMapContainer: {
     flex: 1,
     borderTopWidth: 1,
     borderTopColor: '#f0f0f0',
   },
-  // Bottom Navigation
   bottomNav: {
     flexDirection: 'row',
     borderTopWidth: 1,
@@ -636,7 +637,6 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: 'red',
   },
-  // Boat Selector Modal
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
@@ -691,7 +691,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  // Settings Modal
   settingsContainer: {
     flex: 1,
     backgroundColor: 'white',
@@ -704,8 +703,8 @@ const styles = StyleSheet.create({
     marginBottom: 30,
   },
   settingsContent: {
-      flex: 1,
-      paddingHorizontal: 20,
+    flex: 1,
+    paddingHorizontal: 20,
   },
   settingsButton: {
     backgroundColor: '#000',
@@ -726,10 +725,10 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   settingsCloseButtonText: {
-      color: '#000',
-      textAlign: 'center',
-      fontSize: 16,
-      fontWeight: '600',
+    color: '#000',
+    textAlign: 'center',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
 
