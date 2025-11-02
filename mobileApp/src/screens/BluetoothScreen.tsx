@@ -1,18 +1,39 @@
-// src/screens/BluetoothScreen.tsx
 import React from 'react';
-import {View, Text, StyleSheet} from 'react-native';
+import {
+  Text,
+  Pressable,
+  View,
+} from 'react-native';
+import type { BluetoothDevice } from 'react-native-bluetooth-classic';
 
-export default function BluetoothScreen() {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>BLUETOOTH</Text>
-      <Text style={styles.subtitle}>Placeholder screen (Android).</Text>
-    </View>
-  );
+// Import our reusable styles
+import { styles } from '../styles';
+
+// --- BLUETOOTH SCREEN ---
+interface BluetoothScreenProps {
+  connected: BluetoothDevice | null;
+  quickConnect: () => void;
+  simOn: boolean;
+  setSimOn: (value: boolean | ((prev: boolean) => boolean)) => void;
 }
 
-const styles = StyleSheet.create({
-  container: {flex: 1, alignItems: 'center', justifyContent: 'center'},
-  title: {fontSize: 28, fontWeight: '700', letterSpacing: 1},
-  subtitle: {marginTop: 8, opacity: 0.6},
-});
+export const BluetoothScreen = ({ connected, quickConnect, simOn, setSimOn }: BluetoothScreenProps) => (
+  <View style={styles.screenContainer}>
+    <Text style={styles.screenTitle}>BLUETOOTH</Text>
+    <View style={[styles.centeredContent, { gap: 12 }]}>
+      <Pressable style={styles.connectButton} onPress={quickConnect}>
+        <Text style={styles.connectButtonText}>
+          {connected ? 'Connected' : 'Connect Device'}
+        </Text>
+      </Pressable>
+      <Pressable
+        style={[styles.returnButton, { backgroundColor: simOn ? '#6bbd5a' : '#E0E0E0' }]}
+        onPress={() => setSimOn((s) => !s)}
+      >
+        <Text style={styles.returnButtonText}>
+          {simOn ? 'Stop Sim GPS' : 'Start Sim GPS'}
+        </Text>
+      </Pressable>
+    </View>
+  </View>
+);

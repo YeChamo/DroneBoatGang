@@ -1,18 +1,19 @@
-// src/screens/MapScreen.tsx
 import React from 'react';
-import {View, Text, StyleSheet} from 'react-native';
+import { View } from 'react-native';
 
-export default function MapScreen() {
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>MAP</Text>
-      <Text style={styles.subtitle}>Placeholder screen (Android).</Text>
-    </View>
-  );
+// Import our reusable components and styles
+import { LeafletMap } from '../components/LeafletMap';
+import { styles } from '../styles';
+
+// --- MAP SCREEN ---
+interface MapScreenProps {
+  handleMapReady: (ref: any) => void;
 }
 
-const styles = StyleSheet.create({
-  container: {flex: 1, alignItems: 'center', justifyContent: 'center'},
-  title: {fontSize: 28, fontWeight: '700', letterSpacing: 1},
-  subtitle: {marginTop: 8, opacity: 0.6},
-});
+export const MapScreen = ({ handleMapReady }: MapScreenProps) => {
+  return (
+    <View style={styles.screenContainer}>
+      <LeafletMap interactive={true} onMapReady={handleMapReady} />
+    </View>
+  );
+};
