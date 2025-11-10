@@ -25,20 +25,22 @@ import { styles } from './src/styles';
 import BT from './src/BluetoothManager';
 import CommandLoop from './src/CommandLoop';
 
+// --- NEW GEOFENCE IMPORT ---
+import {
+  isInsideGeofence,
+  getSpawnPoint,
+  getGeofenceForMap,
+} from './src/lakeGeofence';
+
 // --- Type for GPS coordinates ---
 type GpsCoord = {
   latitude: number;
   longitude: number;
 };
 
-// --- GEOFENCE DEFINITION ---
-const GEOFENCE_BOX = {
-  north: 36.0700,
-  south: 36.0695,
-  west: -94.1755,
-  east: -94.1745,
-};
-const GEOFENCE_BUFFER = 0.00005; // Approx 5.5 meters
+// --- GEOFENCE DEFINITION (REMOVED) ---
+// const GEOFENCE_BOX = { ... };
+// const GEOFENCE_BUFFER = 0.00005;
 
 // --- Navigation Helpers ---
 const deg2rad = (deg: number) => deg * (Math.PI / 180);
@@ -83,8 +85,7 @@ const App = () => {
 
   // --- MAP STATE ---
   const [markerPosition, setMarkerPosition] = useState({
-    latitude: 36.0687,
-    longitude: -94.1748,
+    ...getSpawnPoint(), // <-- UPDATED: Use spawn point from geofence file
     heading: 0, // 0 = North, 90 = East
   });
   const boatPositionRef = useRef(markerPosition);
@@ -137,14 +138,7 @@ const App = () => {
   };
 
   // --- AUTONOMY LOGIC ---
-  const isNearLand = (lat: number, lng: number): boolean => {
-    return (
-      lat > GEOFENCE_BOX.south - GEOFENCE_BUFFER &&
-      lat < GEOFENCE_BOX.north + GEOFENCE_BUFFER &&
-      lng > GEOFENCE_BOX.west - GEOFENCE_BUFFER &&
-      lng < GEOFENCE_BOX.east + GEOFENCE_BUFFER
-    );
-  };
+  // (isNearLand function removed)
 
   const stopReturnToHome = () => {
     console.log('AUTONOMY: Stopping return.');
@@ -157,7 +151,6 @@ const App = () => {
     setReturningHome(false);
     setBreadcrumbs([]); // Clear the original path
     
-    // --- UPDATED: Clear the green return path from map ---
     if (mapRef.current && mapInitialized) {
       mapRef.current.injectJavaScript(`window.drawReturnPath([]); true;`);
     }
@@ -178,10 +171,8 @@ const App = () => {
     setReturningHome(true);
 
     const returnPath = [...breadcrumbs].reverse();
-    // We don't pop() the home point, we leave it as the last item to aim for
-    let targetWaypoint = returnPath[0]; // Aim for the first point in the reversed array
+    let targetWaypoint = returnPath[0];
 
-    // --- UPDATED: Clear orange path, draw green path ---
     if (mapRef.current && mapInitialized) {
       mapRef.current.injectJavaScript(`window.updatePath([]); true;`);
       mapRef.current.injectJavaScript(
@@ -196,21 +187,20 @@ const App = () => {
         longitude: currentPosition.longitude 
       };
 
-      if (isNearLand(currentCoord.latitude, currentCoord.longitude)) {
+      // --- UPDATED GEOFENCE CHECK ---
+      if (!isInsideGeofence(currentCoord.latitude, currentCoord.longitude)) {
         console.log('AUTONOMY: Geofence hit during return. Stopping.');
-        Alert.alert('Return Halted', 'Boat stopped to avoid collision.');
+        Alert.alert('Return Halted', 'Boat stopped at geofence boundary.');
         stopReturnToHome();
         return;
       }
 
       const distanceToTarget = getDistance(currentCoord, targetWaypoint);
       
-      // --- UPDATED: Waypoint Reached Logic ---
       if (distanceToTarget < 3) { // 3-meter radius
         console.log('AUTONOMY: Reached waypoint.');
-        returnPath.shift(); // Remove the point we just reached from the *front*
+        returnPath.shift(); 
 
-        // --- Check if Home ---
         if (returnPath.length === 0) {
           console.log('AUTONOMY: Return to home complete!');
           Alert.alert('Return Complete', 'Boat has returned to start.');
@@ -218,7 +208,6 @@ const App = () => {
           return;
         }
 
-        // --- Update target and re-draw green path ---
         targetWaypoint = returnPath[0];
         if (mapRef.current && mapInitialized) {
           mapRef.current.injectJavaScript(
@@ -299,12 +288,11 @@ const App = () => {
         ref.current.injectJavaScript(
           `window.updatePath(${JSON.stringify(breadcrumbs)}); true;`,
         );
-        const leafletBounds = [
-          [GEOFENCE_BOX.south, GEOFENCE_BOX.west],
-          [GEOFENCE_BOX.north, GEOFENCE_BOX.east]
-        ];
+        
+        // --- UPDATED GEOFENCE ---
+        const polygonForMap = getGeofenceForMap();
         ref.current.injectJavaScript(
-          `window.drawGeofence(${JSON.stringify(leafletBounds)}); true;`
+          `window.drawGeofence(${JSON.stringify(polygonForMap)}); true;`
         );
       }
     }, 500);
@@ -341,7 +329,8 @@ const App = () => {
       const newLat = lat + dy * m2degLat;
       const newLng = lng + dx * m2degLng;
 
-      if (isAutonomous && !isReturningHome && isNearLand(newLat, newLng)) {
+      // --- UPDATED GEOFENCE CHECK ---
+      if (isAutonomous && !isReturningHome && !isInsideGeofence(newLat, newLng)) {
         console.log('AUTONOMY: Predictive geofence stop!');
         CommandLoop.setThrottle(0);
         CommandLoop.setSteering(0);

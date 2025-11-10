@@ -19,6 +19,12 @@ export const LeafletMap = React.memo(
       }
     }, [mapInitialized, onMapReady]);
 
+    // --- UPDATED: Set placeholder spawn point for initial load ---
+    // This will be corrected instantly by the `handleMapReady` function,
+    // but it centers the map on the lake immediately on load.
+    const spawnLat = 36.137;
+    const spawnLng = -94.129;
+
     const html = `
 <!DOCTYPE html>
 <html>
@@ -46,7 +52,7 @@ export const LeafletMap = React.memo(
     let map, boatMarker;
     let breadcrumbPath = null;
     let geofenceLayer = null;
-    let returnPathLayer = null; // <-- NEW: Layer for return path
+    let returnPathLayer = null; // <-- Layer for return path
 
     function initMap() {
       map = L.map('map', {
@@ -55,7 +61,7 @@ export const LeafletMap = React.memo(
         touchZoom: ${interactive},
         scrollWheelZoom: ${interactive},
         doubleClickZoom: ${interactive}
-      }).setView([36.0687, -94.1748], 17);
+      }).setView([${spawnLat}, ${spawnLng}], 18); // <-- UPDATED View
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
       
       const boatIcon = L.divIcon({
@@ -64,7 +70,7 @@ export const LeafletMap = React.memo(
         iconSize: [30, 30],
         iconAnchor: [15, 20],
       });
-      boatMarker = L.marker([36.0687, -94.1748], { icon: boatIcon }).addTo(map);
+      boatMarker = L.marker([${spawnLat}, ${spawnLng}], { icon: boatIcon }).addTo(map); // <-- UPDATED Marker
 
       // --- UPDATE BOAT FUNCTION (Existing) ---
       window.updateBoat = (lat, lng, heading) => {
@@ -101,14 +107,22 @@ export const LeafletMap = React.memo(
       };
 
       // --- GEOFENCE (RED) ---
-      window.drawGeofence = (bounds) => {
+      // --- UPDATED to draw a POLYGON ---
+      window.drawGeofence = (polygonCoords) => {
         if (!map) return;
         if (geofenceLayer) geofenceLayer.remove();
         geofenceLayer = null;
-        if (!bounds || bounds.length === 0) return;
-        geofenceLayer = L.rectangle(bounds, { 
+        if (!polygonCoords || polygonCoords.length === 0) return;
+        
+        // L.polygon expects [lat, lng] which getGeofenceForMap() provides
+        geofenceLayer = L.polygon(polygonCoords, { 
           color: "#ff3b30", weight: 2, fillOpacity: 0.3 
         }).addTo(map);
+
+        // --- NEW: Zoom map to fit the new polygon ---
+        if (${interactive}) {
+          map.fitBounds(geofenceLayer.getBounds());
+        }
       };
 
       // --- NEW: RETURN PATH (GREEN) ---
