@@ -1,12 +1,35 @@
+/*
+ * RC Drone Boat – STM32 Firmware
+ *
+ * - Reads GPS NMEA sentences from UART3
+ * - Parses $GPRMC/$GNRMC and validates NMEA checksum
+ * - Sends GPS coordinates over LoRa (UART4) as "GPS,<lat>,<lon>"
+ * - Receives control packets "CTRL,<thr>,<rud>" over LoRa
+ * - Drives throttle (TIM3 CH1) and rudder servo (TIM1 CH1) via 50 Hz PWM
+ *
+ * Main loop is interrupt-driven:
+ *  - UART RX callbacks assemble lines for GPS and LoRa
+ *  - On complete line, handlers parse and update PWM or transmit GPS
+ */
+
 #include "main.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
 
+
+// UART3: GPS
+// UART4: LoRa module
+
 UART_HandleTypeDef huart3;
 UART_HandleTypeDef huart4;
-//CTRL,thr,rud
+
+
+
+// PWM timers
+// TIM1: rudder
+// TIM3: throttle
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim3;
 
@@ -42,10 +65,10 @@ static void LoRa_AT(const char *cmd)
     LoRa_Send(cmd);
 }
 
-static void LoRa_SendGPS(int32_t lat, int32_t lon)
+static void LoRa_SendGPS(float lat, float lon)
 {
     char payload[64];
-    snprintf(payload, sizeof(payload), "GPS,%ld,%ld", (long)lat, (long)lon);
+    snprintf(payload, sizeof(payload), "GPS,%.6f,%.6f", lat, lon);
 
     char cmd[96];
     snprintf(cmd, sizeof(cmd), "AT+SEND=2,%u,%s",
@@ -55,6 +78,12 @@ static void LoRa_SendGPS(int32_t lat, int32_t lon)
     LoRa_Send(cmd);
 }
 
+
+/**
+ * @brief Verify NMEA checksum.
+ * @param s  NMEA sentence string, e.g. "$GPRMC,...*CS"
+ * @return 1 if checksum is valid, 0 otherwise.
+ */
 static int gps_checksum_ok(const char *s)
 {
     if (!s || s[0] != '$') return 0;
@@ -74,7 +103,14 @@ static int gps_checksum_ok(const char *s)
     return x == ((hi << 4) | lo);
 }
 
-static int gps_ddmm_to_e7(const char *ddmm, const char *hemi, int32_t *out)
+/**
+ * @brief Convert NMEA DDMM.MMMM format to signed degrees (float).
+ * @param ddmm  Latitude/longitude component in DDMM.MMMM
+ * @param hemi  'N','S','E','W' for hemisphere
+ * @param out   Output float degrees (e.g. 36.123456)
+ * @return 1 on success.
+ */
+static int gps_ddmm_to_e7(const char *ddmm, const char *hemi, float *out)
 {
     double v = atof(ddmm);
     int deg = v / 100;
@@ -83,9 +119,7 @@ static int gps_ddmm_to_e7(const char *ddmm, const char *hemi, int32_t *out)
 
     if (*hemi == 'S' || *hemi == 'W')
         f = -f;
-
-    long long e7 = (long long)(f * 1e7);
-    *out = (int32_t)e7;
+    *out = (float)f;
     return 1;
 }
 
@@ -111,7 +145,7 @@ static void GPS_Parse(char *line)
 
     if (*tok[2] != 'A') return;
 
-    int32_t lat, lon;
+    float lat, lon;
     gps_ddmm_to_e7(tok[3], tok[4], &lat);
     gps_ddmm_to_e7(tok[5], tok[6], &lon);
 
@@ -179,6 +213,7 @@ int main(void)
     HAL_Delay(50);
 
     while (1) {}
+    // Main loop does nothing; logic runs in UART RX callbacks this function HAL_UART_RxCpltCallback
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
