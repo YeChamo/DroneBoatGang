@@ -1,0 +1,7 @@
+../Core/Src/gps.c:20:12:gps_validate_checksum	32	static
+../Core/Src/gps.c:33:12:gps_parse_ddmm_to_float	72	static
+../Core/Src/gps.c:44:13:gps_parse_rmc	128	static
+../Core/Src/gps.c:71:9:gps_button_pressed	24	static
+../Core/Src/gps.c:88:6:gps_task	232	static
+../Core/Src/gps.c:108:6:StartGPSRxIT	8	static
+../Core/Src/gps.c:112:6:gps_rx_callback	16	static

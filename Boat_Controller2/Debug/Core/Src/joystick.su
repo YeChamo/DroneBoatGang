@@ -1,0 +1,7 @@
+../Core/Src/joystick.c:22:10:joystick_read_adc	40	static
+../Core/Src/joystick.c:71:16:process_thrust	24	static
+../Core/Src/joystick.c:106:16:process_rudder	24	static
+../Core/Src/joystick.c:152:13:send_together	64	static
+../Core/Src/joystick.c:161:6:joystick_init	8	static
+../Core/Src/joystick.c:173:9:joystick_is_active	16	static
+../Core/Src/joystick.c:182:6:joystick_task	24	static
